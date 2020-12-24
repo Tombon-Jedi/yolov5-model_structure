@@ -6,7 +6,7 @@ import math
 https://blog.csdn.net/Q1u1NG/article/details/107511465 
 https://zhuanlan.zhihu.com/p/143747206
 参考结构图
-同时也参考u版的yolov5s的model打印出来的结构，心得，先主干的pipeline,在看枝干，一般在forward里'''
+同时也参考u版的yolov5s的model打印出来的结构'''
 
 class Conv(nn.Module):
     def __init__(self,c_in,c_out,k=1,s=1,p=0):
