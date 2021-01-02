@@ -44,15 +44,15 @@ class BL(nn.Module): #concat之后的batchnormal+激活。
     def forward(self,x):
         return self.bl(x)
 
-class Bottleneckcsp(nn.Module): #c_ = c_out*e,e=0.5,默认缩放其通道的因子。
+class Bottleneckcsp(nn.Module): #c_ = c_out*e,e=0.5,默认缩放其通道的因子。 csp的实现不是直接的对输入的特征图拆分，而是通过1*1卷积的方式进行通道融合且减少，默认是一半。
     def __init__(self,c_in,c_out,n=3,depth_multiple=0.33,e=0.5): #n为重复bottleneck的数量。
         super(Bottleneckcsp, self).__init__()
         c_ = int(c_in*e)
         self.n = max(round(n*depth_multiple),1)
-        self.conv1 = Conv(c_in,c_) #bottleneck之前的那个卷积。
+        self.conv1 = Conv(c_in,c_) #bottleneck之前的那个卷积，融合并减少通道的作用。
         self.bottleneck = nn.ModuleList([Bottleneck(c_) for i in range(self.n)])
         self.conv2 = nn.Conv2d(c_,c_,1,1) #bottleneck之后的那个卷积 作用，融合通道。
-        self.conv3 = nn.Conv2d(c_in,c_,1,1) #跳跃连接的卷积，目的，调整通道和bottleneck的输出通道一致。也有融合通道的作用。
+        self.conv3 = nn.Conv2d(c_in,c_,1,1) #跳跃连接的卷积，目的，调整通道和bottleneck的输出通道一致。也有融合并减少通道的作用。
         #然后concat在forward中体现。
         self.bl = BL(c_*2)
         self.conv4 = Conv(c_*2,c_out,1,1) #确定输出通道数量。
