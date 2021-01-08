@@ -6,19 +6,20 @@ import math
 https://blog.csdn.net/Q1u1NG/article/details/107511465 
 https://zhuanlan.zhihu.com/p/143747206
 参考结构图
-同时也参考u版的yolov5s的model打印出来的结构'''
+同时也参考u版的yolov5s的model打印出来的结构，以及models目录下的common脚本里的各个模块
+心得，先主干的pipeline,在看枝干，一般在forward里'''
 
 class Conv(nn.Module):
     def __init__(self,c_in,c_out,k=1,s=1,p=0):
         super(Conv, self).__init__()
-        self.conv = nn.Sequential(nn.Conv2d(c_in,c_out,k,s,p),
-                                  nn.BatchNorm2d(c_out),
-                                  nn.Hardswish())
+        self.conv = nn.Conv2d(c_in,c_out,k,s,p)
+        self.bn = nn.BatchNorm2d(c_out)
+        self.act = nn.Hardswish()
     def forward(self,x):
-        return self.conv(x)
+        return self.act(self.bn(self.conv(x)))
 
 class Focus(nn.Module): #
-    def __init__(self,c_in=12,c_out=32):
+    def __init__(self,c_in=12,c_out=64): #c_in 为3*4，后面那个concat操作导致
         super(Focus, self).__init__()
         self.conv_f = Conv(c_in,c_out,3,1,1)
     def forward(self, x):  # x(b,c,h,w) -> y(b,4c,h/2,w/2) 切片后合并。
@@ -26,14 +27,16 @@ class Focus(nn.Module): #
 
 
 class Bottleneck(nn.Module): #实际是借鉴resnet残差结构，类似的，注意中间的部分要保证特征图大小不变。 通道数量输入输出一致。
-    def __init__(self,c_):
+    def __init__(self,c_in,c_out,shortcut=True, g=1, e=0.5):
         super(Bottleneck, self).__init__()
+        c_ = int(c_out * e)  # hidden channels
         self.bottleneck = nn.Sequential(
-            Conv(c_,c_), #此处，通道大小未变，并未如往常的残差结构缩小通道减少计算量，主要是为了融合通道。
-            Conv(c_,c_,3,1,1)
+            Conv(c_in,c_), #此处，通道减少，同时融合通道。
+            Conv(c_,c_out,3,1,1)
         )
+        self.add = shortcut and c_in == c_out #如果输入输出通道不一致就不shortcut了
     def forward(self,x):
-         return self.bottleneck(x)+x
+         return self.bottleneck(x)+x if self.add else self.bottleneck(x)
 class BL(nn.Module): #concat之后的batchnormal+激活。
     def __init__(self,c_):
         super(BL, self).__init__()
@@ -44,15 +47,15 @@ class BL(nn.Module): #concat之后的batchnormal+激活。
     def forward(self,x):
         return self.bl(x)
 
-class Bottleneckcsp(nn.Module): #c_ = c_out*e,e=0.5,默认缩放其通道的因子。 csp的实现不是直接的对输入的特征图拆分，而是通过1*1卷积的方式进行通道融合且减少，默认是一半。
+class Bottleneckcsp(nn.Module): #c_ = c_out*e,e=0.5,默认缩放其通道的因子。
     def __init__(self,c_in,c_out,n=3,depth_multiple=0.33,e=0.5): #n为重复bottleneck的数量。
         super(Bottleneckcsp, self).__init__()
         c_ = int(c_in*e)
         self.n = max(round(n*depth_multiple),1)
-        self.conv1 = Conv(c_in,c_) #bottleneck之前的那个卷积，融合并减少通道的作用。
-        self.bottleneck = nn.ModuleList([Bottleneck(c_) for i in range(self.n)])
+        self.conv1 = Conv(c_in,c_) #bottleneck之前的那个卷积。
+        self.bottleneck = nn.ModuleList([Bottleneck(c_,c_) for _ in range(self.n)])
         self.conv2 = nn.Conv2d(c_,c_,1,1) #bottleneck之后的那个卷积 作用，融合通道。
-        self.conv3 = nn.Conv2d(c_in,c_,1,1) #跳跃连接的卷积，目的，调整通道和bottleneck的输出通道一致。也有融合并减少通道的作用。
+        self.conv3 = nn.Conv2d(c_in,c_,1,1) #跳跃连接的卷积，目的，调整通道和bottleneck的输出通道一致。也有融合通道的作用。
         #然后concat在forward中体现。
         self.bl = BL(c_*2)
         self.conv4 = Conv(c_*2,c_out,1,1) #确定输出通道数量。
@@ -68,15 +71,15 @@ class Bottleneckcsp(nn.Module): #c_ = c_out*e,e=0.5,默认缩放其通道的因�
         y = self.conv4(y)
         return y
 
-'''#注意spp模块是借鉴sppnet的思想，并不会像空间金字塔池化一样输出固定大小的特征图。spp模块作用是全局和局部特征融合，显著的分离了最重要的上下文特征。
-最后不改变输入特征图大小，也就是说输入特征图h*w，输出还是h*w'''
-class SPP(nn.Module): 
-    def __init__(self,c_in,c_out):
+
+class SPP(nn.Module):
+    def __init__(self,c_in,c_out, k=(5, 9, 13)):
         super(SPP, self).__init__()
         self.conv1 = Conv(c_in,c_in//2,1,1)
-        self.maxpool = nn.ModuleList([nn.MaxPool2d(kernel_size=5, stride=1, padding=2, dilation=1, ceil_mode=False),
-                                      nn.MaxPool2d(kernel_size=9, stride=1, padding=4, dilation=1, ceil_mode=False),
-                                      nn.MaxPool2d(kernel_size=13, stride=1, padding=6, dilation=1, ceil_mode=False)])
+        self.maxpool = nn.ModuleList([nn.MaxPool2d(kernel_size=x, stride=1, padding=x // 2) for x in k])
+        '''[nn.MaxPool2d(kernel_size=5, stride=1, padding=2, dilation=1, ceil_mode=False), #padding实际上是卷积核的整除
+            nn.MaxPool2d(kernel_size=9, stride=1, padding=4, dilation=1, ceil_mode=False),
+            nn.MaxPool2d(kernel_size=13, stride=1, padding=6, dilation=1, ceil_mode=False)]'''
         ##然后concat在forward中体现。
         self.conv2 = Conv(c_in*2,c_out,1,1)
 
@@ -110,7 +113,7 @@ class MainNet(nn.Module):
         c_init= math.ceil(64*width_multiple/8)*8
         # print('c_init',c_init) 32
         #backbone
-        # self.focus = Focus(12,c_init)
+        # self.focus = Focus(12,c_init) #12是3*4得来，具体看模块中的实现。
         # self.conv1 = Conv(c_init,c_init*2,3,2,1) #32,64
         # self.bottleneck_1_3 = Bottleneckcsp(c_init*2,c_init*2,n=3,depth_multiple=depth_multiple) #64,64
         # self.conv2 = Conv(c_init*2,c_init*4,3,2,1) #64,128
@@ -195,17 +198,9 @@ class MainNet(nn.Module):
 if __name__ == '__main__':
     input = torch.ones(1,3,608,608)
     # print(input.shape
-    # net = MainNet(depth_multiple=1,width_multiple=1)
-    net = MainNet()
+    net = MainNet(depth_multiple=1,width_multiple=1)
+    # net = MainNet()
     head_1,head_2,head_3 = net(input)
     print(head_1.shape,head_2.shape,head_3.shape)
     # print(net)
-
-
-
-
-
-
-
-
 
