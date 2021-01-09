@@ -48,14 +48,14 @@ class BL(nn.Module): #concat之后的batchnormal+激活。
         return self.bl(x)
 
 class Bottleneckcsp(nn.Module): #c_ = c_out*e,e=0.5,默认缩放其通道的因子。
-    def __init__(self,c_in,c_out,n=3,depth_multiple=0.33,e=0.5): #n为重复bottleneck的数量。
+    def __init__(self,c_in,c_out,n=3,depth_multiple=0.33,e=0.5,shortcut=True): #n为重复bottleneck的数量。
         super(Bottleneckcsp, self).__init__()
-        c_ = int(c_in*e)
+        c_ = int(c_out*e)
         self.n = max(round(n*depth_multiple),1)
         self.conv1 = Conv(c_in,c_) #bottleneck之前的那个卷积。
-        self.bottleneck = nn.ModuleList([Bottleneck(c_,c_) for _ in range(self.n)])
-        self.conv2 = nn.Conv2d(c_,c_,1,1) #bottleneck之后的那个卷积 作用，融合通道。
-        self.conv3 = nn.Conv2d(c_in,c_,1,1) #跳跃连接的卷积，目的，调整通道和bottleneck的输出通道一致。也有融合通道的作用。
+        self.bottleneck = nn.ModuleList([Bottleneck(c_,c_,shortcut) for _ in range(self.n)])
+        self.conv2 = nn.Conv2d(c_,c_,1,1, bias=False) #bottleneck之后的那个卷积 作用，融合通道。
+        self.conv3 = nn.Conv2d(c_in,c_,1,1, bias=False) #跳跃连接的卷积，目的，调整通道和bottleneck的输出通道一致。也有融合通道的作用。
         #然后concat在forward中体现。
         self.bl = BL(c_*2)
         self.conv4 = Conv(c_*2,c_out,1,1) #确定输出通道数量。
@@ -196,11 +196,16 @@ class MainNet(nn.Module):
 
 
 if __name__ == '__main__':
-    input = torch.ones(1,3,608,608)
+    input = torch.ones(1,3,416,416)
     # print(input.shape
     net = MainNet(depth_multiple=1,width_multiple=1)
     # net = MainNet()
     head_1,head_2,head_3 = net(input)
     print(head_1.shape,head_2.shape,head_3.shape)
     # print(net)
+
+
+
+
+
 
